@@ -1,0 +1,85 @@
+-- Índices: plan de ejecución antes y después de crear cada índice.
+SET LINESIZE 200
+SET PAGESIZE 100
+
+
+-- 1. Llegadas de un día por estado · índice COMPUESTO
+EXPLAIN PLAN SET STATEMENT_ID = 'C1_ANTES' FOR
+SELECT estado, COUNT(*) AS reservas
+  FROM RESERVA
+ WHERE fecha_entrada = DATE '2025-07-15'
+ GROUP BY estado;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C1_ANTES', 'TYPICAL'));
+
+CREATE INDEX idx_reserva_entrada_estado ON RESERVA (fecha_entrada, estado);
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'RESERVA', cascade => TRUE);
+
+EXPLAIN PLAN SET STATEMENT_ID = 'C1_DESPUES' FOR
+SELECT estado, COUNT(*) AS reservas
+  FROM RESERVA
+ WHERE fecha_entrada = DATE '2025-07-15'
+ GROUP BY estado;
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C1_DESPUES', 'TYPICAL'));
+
+
+-- 2. Cliente por correo sin importar mayúsculas · índice BASADO EN FUNCIÓN
+EXPLAIN PLAN SET STATEMENT_ID = 'C2_ANTES' FOR
+SELECT id_cliente, nombre, cedula, correo
+  FROM CLIENTE
+ WHERE UPPER(correo) = UPPER('Cliente1500@TurismoUQ.com');
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C2_ANTES', 'TYPICAL'));
+
+CREATE INDEX idx_cliente_correo_upper ON CLIENTE (UPPER(correo));
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'CLIENTE', cascade => TRUE, method_opt => 'FOR ALL HIDDEN COLUMNS SIZE 1');
+
+EXPLAIN PLAN SET STATEMENT_ID = 'C2_DESPUES' FOR
+SELECT id_cliente, nombre, cedula, correo
+  FROM CLIENTE
+ WHERE UPPER(correo) = UPPER('Cliente1500@TurismoUQ.com');
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C2_DESPUES', 'TYPICAL'));
+
+
+-- 3. Pagos recibidos en un día · índice COMPUESTO
+EXPLAIN PLAN SET STATEMENT_ID = 'C3_ANTES' FOR
+SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado
+  FROM PAGO
+ WHERE fecha = DATE '2025-07-01';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C3_ANTES', 'TYPICAL'));
+
+CREATE INDEX idx_pago_fecha_valor ON PAGO (fecha, valor);
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'PAGO', cascade => TRUE);
+
+EXPLAIN PLAN SET STATEMENT_ID = 'C3_DESPUES' FOR
+SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado
+  FROM PAGO
+ WHERE fecha = DATE '2025-07-01';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C3_DESPUES', 'TYPICAL'));
+
+
+-- 4. Índice que NO ayuda: FINALIZADA es cerca del 60 % de las reservas,
+--    así que leer la tabla completa es más barato que usar el índice.
+EXPLAIN PLAN SET STATEMENT_ID = 'C4_ANTES' FOR
+SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos
+  FROM RESERVA
+ WHERE estado = 'FINALIZADA';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_ANTES', 'TYPICAL'));
+
+CREATE INDEX idx_reserva_estado ON RESERVA (estado);
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'RESERVA', cascade => TRUE);
+
+-- El plan no cambia: el optimizador ignora el índice
+EXPLAIN PLAN SET STATEMENT_ID = 'C4_DESPUES' FOR
+SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos
+  FROM RESERVA
+ WHERE estado = 'FINALIZADA';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_DESPUES', 'TYPICAL'));
+
+-- Forzando el índice el costo sube
+EXPLAIN PLAN SET STATEMENT_ID = 'C4_FORZADO' FOR
+SELECT /*+ INDEX(r idx_reserva_estado) */ COUNT(*) AS reservas, SUM(valor_total) AS ingresos
+  FROM RESERVA r
+ WHERE estado = 'FINALIZADA';
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_FORZADO', 'TYPICAL'));
+
+-- No sirve y hace más lentos los INSERT de RESERVA: se elimina
+DROP INDEX idx_reserva_estado;
