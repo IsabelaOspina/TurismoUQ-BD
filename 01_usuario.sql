@@ -1,0 +1,21 @@
+-- Ejecutar como SYSTEM en XEPDB1
+DEFINE usuario = TURISMO_UQ
+DEFINE clave   = TurismoUQ2026
+
+CREATE USER &usuario IDENTIFIED BY "&clave"
+    DEFAULT TABLESPACE USERS
+    QUOTA UNLIMITED ON USERS
+    QUOTA UNLIMITED ON TS_HISTORICO;
+
+GRANT CREATE SESSION,
+      CREATE TABLE,
+      CREATE SEQUENCE,
+      CREATE VIEW,
+      CREATE MATERIALIZED VIEW,
+      CREATE PROCEDURE,
+      CREATE TRIGGER
+   TO &usuario;
+
+SELECT username, default_tablespace
+  FROM dba_users
+ WHERE username = UPPER('&usuario');
