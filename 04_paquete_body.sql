@@ -281,12 +281,17 @@ END fn_valor_estadia;
             );
         END IF;
 
-        -- 9. Calcular nuevamente el valor de la estadía
+        -- 9. Calcular nuevamente el valor: estadía + servicios ya contratados
         v_valor := fn_valor_estadia(
             p_id_habitacion,
             p_fecha_in,
             p_fecha_out
         );
+
+        SELECT v_valor + NVL(SUM(subtotal), 0)
+          INTO v_valor
+          FROM RESERVA_SERVICIO
+         WHERE id_reserva = p_id_reserva;
 
         -- 10. Actualizar datos de la reserva
         UPDATE RESERVA
@@ -591,6 +596,166 @@ END fn_valor_estadia;
             RAISE;
 
     END sp_liquidacion_temporada;
+
+    -- PROCEDIMIENTO: sp_reservar_y_pagar
+    PROCEDURE sp_reservar_y_pagar(
+        p_id_cliente         IN  NUMBER,
+        p_id_habitacion      IN  NUMBER,
+        p_fecha_in           IN  DATE,
+        p_fecha_out          IN  DATE,
+        p_numero_personas    IN  NUMBER,
+        p_valor_pago         IN  NUMBER,
+        p_metodo_pago        IN  VARCHAR2,
+        p_id_servicio        IN  NUMBER,
+        p_cantidad_servicio  IN  NUMBER,
+        p_id_reserva         OUT NUMBER,
+        p_id_pago            OUT NUMBER,
+        p_resultado_servicio OUT VARCHAR2,
+        p_detalle_servicio   OUT VARCHAR2,
+        p_valor_total        OUT NUMBER
+    ) IS
+
+        v_aloj_habitacion HABITACION.id_alojamiento%TYPE;
+        v_aloj_servicio   SERVICIO.id_alojamiento%TYPE;
+        v_precio_servicio SERVICIO.precio%TYPE;
+        v_subtotal        RESERVA_SERVICIO.subtotal%TYPE;
+
+    BEGIN
+
+        SAVEPOINT sp_inicio;
+
+        -- 1. Crear la reserva (valor_total = valor de la estadía)
+        sp_crear_reserva(
+            p_id_cliente,
+            p_id_habitacion,
+            p_fecha_in,
+            p_fecha_out,
+            p_numero_personas,
+            p_id_reserva
+        );
+
+        SAVEPOINT sp_reserva_creada;
+
+        -- 2. Servicio adicional (opcional): suma su subtotal al valor de la reserva
+        IF p_id_servicio IS NULL THEN
+
+            p_resultado_servicio := 'SIN_SERVICIO';
+
+        ELSE
+
+            BEGIN
+
+                IF p_cantidad_servicio IS NULL OR p_cantidad_servicio NOT BETWEEN 1 AND 10 THEN
+                    RAISE_APPLICATION_ERROR(
+                        -20403,
+                        'La cantidad del servicio debe estar entre 1 y 10.'
+                    );
+                END IF;
+
+                BEGIN
+                    SELECT id_alojamiento, precio
+                      INTO v_aloj_servicio, v_precio_servicio
+                      FROM SERVICIO
+                     WHERE id_servicio = p_id_servicio;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        RAISE_APPLICATION_ERROR(
+                            -20402,
+                            'No existe el servicio con ID ' || p_id_servicio || '.'
+                        );
+                END;
+
+                SELECT id_alojamiento
+                  INTO v_aloj_habitacion
+                  FROM HABITACION
+                 WHERE id_habitacion = p_id_habitacion;
+
+                IF v_aloj_servicio <> v_aloj_habitacion THEN
+                    RAISE_APPLICATION_ERROR(
+                        -20402,
+                        'El servicio no pertenece al alojamiento de la habitación.'
+                    );
+                END IF;
+
+                v_subtotal := p_cantidad_servicio * v_precio_servicio;
+
+                INSERT INTO RESERVA_SERVICIO (
+                    id_servicio,
+                    id_reserva,
+                    cantidad,
+                    subtotal
+                ) VALUES (
+                    p_id_servicio,
+                    p_id_reserva,
+                    p_cantidad_servicio,
+                    v_subtotal
+                );
+
+                UPDATE RESERVA
+                   SET valor_total = valor_total + v_subtotal
+                 WHERE id_reserva = p_id_reserva;
+
+                p_resultado_servicio := 'AGREGADO';
+
+            EXCEPTION
+                WHEN OTHERS THEN
+                    -- Rollback parcial: se deshacen el servicio y la suma al valor;
+                    -- la reserva se conserva
+                    ROLLBACK TO SAVEPOINT sp_reserva_creada;
+                    p_resultado_servicio := 'REVERTIDO';
+                    p_detalle_servicio   := SQLERRM;
+            END;
+
+        END IF;
+
+        SELECT valor_total
+          INTO p_valor_total
+          FROM RESERVA
+         WHERE id_reserva = p_id_reserva;
+
+        -- 3. Validar y registrar el pago sobre el valor total de la reserva
+        IF p_valor_pago IS NULL OR p_valor_pago <= 0 OR p_valor_pago > p_valor_total THEN
+            RAISE_APPLICATION_ERROR(
+                -20400,
+                'El pago debe ser mayor que cero y no puede superar el valor de la reserva ('
+                || TO_CHAR(p_valor_total, 'FM999G999G999G990') || ').'
+            );
+        END IF;
+
+        IF p_metodo_pago IS NULL
+           OR p_metodo_pago NOT IN ('EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'PSE') THEN
+            RAISE_APPLICATION_ERROR(
+                -20401,
+                'El método de pago debe ser EFECTIVO, TARJETA, TRANSFERENCIA o PSE.'
+            );
+        END IF;
+
+        INSERT INTO PAGO (
+            id_pago,
+            fecha,
+            valor,
+            confirmado,
+            metodo_pago,
+            id_reserva
+        ) VALUES (
+            seq_pago.NEXTVAL,
+            TRUNC(SYSDATE),
+            p_valor_pago,
+            'SI',
+            p_metodo_pago,
+            p_id_reserva
+        )
+        RETURNING id_pago INTO p_id_pago;
+
+        COMMIT;
+
+    EXCEPTION
+        WHEN OTHERS THEN
+            -- Rollback total: no queda ni la reserva ni el servicio
+            ROLLBACK TO SAVEPOINT sp_inicio;
+            RAISE;
+
+    END sp_reservar_y_pagar;
 
 END PKG_TURISMO_UQ;
 /

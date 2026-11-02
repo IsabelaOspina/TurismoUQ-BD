@@ -233,29 +233,7 @@ BEGIN
 END;
 /
 
--- 12. VALOR DE CADA RESERVA = suma de fn_valor_estadia de sus habitaciones
-UPDATE RESERVA r
-   SET valor_total = (SELECT SUM(PKG_TURISMO_UQ.fn_valor_estadia(rh.id_habitacion,
-                                                                 r.fecha_entrada,
-                                                                 r.fecha_salida))
-                        FROM RESERVA_HABITACION rh
-                       WHERE rh.id_reserva = r.id_reserva);
-COMMIT;
-
--- 13. PAGOS: uno por reserva no cancelada
-INSERT INTO PAGO (id_pago, fecha, valor, confirmado, metodo_pago, id_reserva)
-SELECT seq_pago.NEXTVAL,
-       fecha_reserva,
-       ROUND(valor_total * CASE estado WHEN 'FINALIZADA' THEN 1 WHEN 'CONFIRMADA' THEN 0.5 ELSE 0.3 END, 2),
-       CASE estado WHEN 'PENDIENTE' THEN 'NO' ELSE 'SI' END,
-       CASE MOD(id_reserva, 4) WHEN 0 THEN 'EFECTIVO' WHEN 1 THEN 'TARJETA'
-                               WHEN 2 THEN 'TRANSFERENCIA' ELSE 'PSE' END,
-       id_reserva
-  FROM RESERVA
- WHERE estado <> 'CANCELADA';
-COMMIT;
-
--- 14. RESERVA_SERVICIO (40.000): servicios del alojamiento de la reserva
+-- 12. RESERVA_SERVICIO (40.000): servicios del alojamiento de la reserva
 DECLARE
     v_cant NUMBER;
 BEGIN
@@ -287,6 +265,31 @@ BEGIN
     COMMIT;
 END;
 /
+
+-- 13. VALOR DE CADA RESERVA = estadía (fn_valor_estadia de sus habitaciones) + servicios
+UPDATE RESERVA r
+   SET valor_total = (SELECT SUM(PKG_TURISMO_UQ.fn_valor_estadia(rh.id_habitacion,
+                                                                 r.fecha_entrada,
+                                                                 r.fecha_salida))
+                        FROM RESERVA_HABITACION rh
+                       WHERE rh.id_reserva = r.id_reserva)
+                     + (SELECT NVL(SUM(s.subtotal), 0)
+                          FROM RESERVA_SERVICIO s
+                         WHERE s.id_reserva = r.id_reserva);
+COMMIT;
+
+-- 14. PAGOS: uno por reserva no cancelada
+INSERT INTO PAGO (id_pago, fecha, valor, confirmado, metodo_pago, id_reserva)
+SELECT seq_pago.NEXTVAL,
+       fecha_reserva,
+       ROUND(valor_total * CASE estado WHEN 'FINALIZADA' THEN 1 WHEN 'CONFIRMADA' THEN 0.5 ELSE 0.3 END, 2),
+       CASE estado WHEN 'PENDIENTE' THEN 'NO' ELSE 'SI' END,
+       CASE MOD(id_reserva, 4) WHEN 0 THEN 'EFECTIVO' WHEN 1 THEN 'TARJETA'
+                               WHEN 2 THEN 'TRANSFERENCIA' ELSE 'PSE' END,
+       id_reserva
+  FROM RESERVA
+ WHERE estado <> 'CANCELADA';
+COMMIT;
 
 -- 15. RESEÑAS (5.000) sobre reservas finalizadas
 INSERT INTO RESENA (id_resena, calificacion, comentario, fecha, id_reserva)
