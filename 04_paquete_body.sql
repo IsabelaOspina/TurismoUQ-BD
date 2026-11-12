@@ -619,6 +619,7 @@ END fn_valor_estadia;
         v_aloj_servicio   SERVICIO.id_alojamiento%TYPE;
         v_precio_servicio SERVICIO.precio%TYPE;
         v_subtotal        RESERVA_SERVICIO.subtotal%TYPE;
+        v_minimo          NUMBER;
 
     BEGIN
 
@@ -722,6 +723,16 @@ END fn_valor_estadia;
             );
         END IF;
 
+        v_minimo := CEIL(p_valor_total * c_pago_minimo);
+
+        IF p_valor_pago < v_minimo THEN
+            RAISE_APPLICATION_ERROR(
+                -20404,
+                'El pago mínimo es el ' || (c_pago_minimo * 100) || ' % del valor de la reserva ('
+                || TO_CHAR(v_minimo, 'FM999G999G999G990') || ').'
+            );
+        END IF;
+
         IF p_metodo_pago IS NULL
            OR p_metodo_pago NOT IN ('EFECTIVO', 'TARJETA', 'TRANSFERENCIA', 'PSE') THEN
             RAISE_APPLICATION_ERROR(
@@ -756,6 +767,81 @@ END fn_valor_estadia;
             RAISE;
 
     END sp_reservar_y_pagar;
+
+    -- PROCEDIMIENTO: sp_cancelar_reserva
+    -- Cancela la reserva. Los pagos de hace 7 días o menos se devuelven
+    -- (quedan con confirmado = 'NO'); los más antiguos no se devuelven.
+    PROCEDURE sp_cancelar_reserva(
+        p_id_reserva     IN  NUMBER,
+        p_valor_devuelto OUT NUMBER,
+        p_valor_retenido OUT NUMBER
+    ) IS
+        v_estado RESERVA.estado%TYPE;
+    BEGIN
+
+        BEGIN
+            SELECT estado
+              INTO v_estado
+              FROM RESERVA
+             WHERE id_reserva = p_id_reserva
+               FOR UPDATE;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                RAISE_APPLICATION_ERROR(
+                    -20110,
+                    'No existe la reserva con ID ' || p_id_reserva || '.'
+                );
+        END;
+
+        IF v_estado NOT IN ('PENDIENTE', 'CONFIRMADA') THEN
+            RAISE_APPLICATION_ERROR(
+                -20405,
+                'Solo se pueden cancelar reservas pendientes o confirmadas (estado actual: '
+                || v_estado || ').'
+            );
+        END IF;
+
+        SELECT NVL(SUM(CASE WHEN fecha + c_dias_devolucion >= TRUNC(SYSDATE) THEN valor END), 0),
+               NVL(SUM(CASE WHEN fecha + c_dias_devolucion <  TRUNC(SYSDATE) THEN valor END), 0)
+          INTO p_valor_devuelto, p_valor_retenido
+          FROM PAGO
+         WHERE id_reserva = p_id_reserva
+           AND confirmado = 'SI';
+
+        UPDATE PAGO
+           SET confirmado = 'NO'
+         WHERE id_reserva = p_id_reserva
+           AND confirmado = 'SI'
+           AND fecha + c_dias_devolucion >= TRUNC(SYSDATE);
+
+        UPDATE RESERVA
+           SET estado = 'CANCELADA'
+         WHERE id_reserva = p_id_reserva;
+
+        COMMIT;
+
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END sp_cancelar_reserva;
+
+    -- Último día en que una cancelación devuelve el dinero: fecha del pago + 7 días
+    FUNCTION fn_fecha_limite_devolucion(
+        p_id_pago IN NUMBER
+    ) RETURN DATE IS
+        v_fecha PAGO.fecha%TYPE;
+    BEGIN
+        SELECT fecha
+          INTO v_fecha
+          FROM PAGO
+         WHERE id_pago = p_id_pago;
+
+        RETURN v_fecha + c_dias_devolucion;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN NULL;
+    END fn_fecha_limite_devolucion;
 
 END PKG_TURISMO_UQ;
 /
