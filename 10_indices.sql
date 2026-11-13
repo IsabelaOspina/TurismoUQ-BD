@@ -9,7 +9,7 @@ BEGIN
     FOR i IN (SELECT index_name
                 FROM user_indexes
                WHERE index_name IN ('IDX_RESERVA_ENTRADA_ESTADO', 'IDX_CLIENTE_CORREO_UPPER',
-                                    'IDX_PAGO_FECHA_VALOR', 'IDX_RESERVA_ESTADO')) LOOP
+                                    'IDX_PAGO_FECHA_VALOR', 'IDX_RESERVA_ESTADO', 'IDX_PAGO_METODO')) LOOP
         EXECUTE IMMEDIATE 'DROP INDEX ' || i.index_name;
     END LOOP;
 END;
@@ -171,12 +171,13 @@ END;
 /
 
 
--- 4. Índice que NO ayuda: FINALIZADA es la gran mayoría de las reservas,
---    así que leer la tabla completa es más barato que usar el índice.
+-- 4. Índice que NO ayuda: solo hay 4 métodos de pago (EFECTIVO es cerca del 25 %)
+--    y esos pagos están repartidos por toda la tabla. Leer la tabla completa de forma
+--    secuencial es más barato que saltar fila por fila desde el índice.
 EXPLAIN PLAN SET STATEMENT_ID = 'C4_ANTES' FOR
-SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos
-  FROM RESERVA
- WHERE estado = 'FINALIZADA';
+SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado
+  FROM PAGO
+ WHERE metodo_pago = 'EFECTIVO';
 SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_ANTES', 'TYPICAL'));
 
 -- Tiempo: C4 sin índice
@@ -184,10 +185,10 @@ DECLARE
     v_inicio TIMESTAMP WITH TIME ZONE;
     v_tiempo INTERVAL DAY TO SECOND;
 BEGIN
-    FOR r IN (SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;   -- calentamiento
+    FOR r IN (SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;   -- calentamiento
     v_inicio := SYSTIMESTAMP;
     FOR i IN 1 .. 50 LOOP
-        FOR r IN (SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;
+        FOR r IN (SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;
     END LOOP;
     v_tiempo := SYSTIMESTAMP - v_inicio;
     DBMS_OUTPUT.PUT_LINE('C4 sin índice: '
@@ -196,16 +197,14 @@ BEGIN
 END;
 /
 
-CREATE INDEX idx_reserva_estado ON RESERVA (estado);
--- Histograma: sin él Oracle supone que los 4 estados se reparten por igual (25 % cada uno)
--- y elegiría el índice; con él sabe que FINALIZADA es la mayoría.
-EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'RESERVA', cascade => TRUE, method_opt => 'FOR ALL INDEXED COLUMNS SIZE 254');
+CREATE INDEX idx_pago_metodo ON PAGO (metodo_pago);
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'PAGO', cascade => TRUE);
 
 -- El plan no cambia: el optimizador ignora el índice
 EXPLAIN PLAN SET STATEMENT_ID = 'C4_DESPUES' FOR
-SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos
-  FROM RESERVA
- WHERE estado = 'FINALIZADA';
+SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado
+  FROM PAGO
+ WHERE metodo_pago = 'EFECTIVO';
 SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_DESPUES', 'TYPICAL'));
 
 -- Tiempo: C4 con índice
@@ -213,10 +212,10 @@ DECLARE
     v_inicio TIMESTAMP WITH TIME ZONE;
     v_tiempo INTERVAL DAY TO SECOND;
 BEGIN
-    FOR r IN (SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;   -- calentamiento
+    FOR r IN (SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;   -- calentamiento
     v_inicio := SYSTIMESTAMP;
     FOR i IN 1 .. 50 LOOP
-        FOR r IN (SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;
+        FOR r IN (SELECT COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;
     END LOOP;
     v_tiempo := SYSTIMESTAMP - v_inicio;
     DBMS_OUTPUT.PUT_LINE('C4 con índice: '
@@ -227,9 +226,9 @@ END;
 
 -- Forzando el índice el costo sube
 EXPLAIN PLAN SET STATEMENT_ID = 'C4_FORZADO' FOR
-SELECT /*+ INDEX(r idx_reserva_estado) */ COUNT(*) AS reservas, SUM(valor_total) AS ingresos
-  FROM RESERVA r
- WHERE estado = 'FINALIZADA';
+SELECT /*+ INDEX(p idx_pago_metodo) */ COUNT(*) AS pagos, SUM(valor) AS recaudado
+  FROM PAGO p
+ WHERE metodo_pago = 'EFECTIVO';
 SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'C4_FORZADO', 'TYPICAL'));
 
 -- Tiempo: C4 forzando el índice
@@ -237,10 +236,10 @@ DECLARE
     v_inicio TIMESTAMP WITH TIME ZONE;
     v_tiempo INTERVAL DAY TO SECOND;
 BEGIN
-    FOR r IN (SELECT /*+ INDEX(r idx_reserva_estado) */ COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA r WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;   -- calentamiento
+    FOR r IN (SELECT /*+ INDEX(p idx_pago_metodo) */ COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO p WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;   -- calentamiento
     v_inicio := SYSTIMESTAMP;
     FOR i IN 1 .. 50 LOOP
-        FOR r IN (SELECT /*+ INDEX(r idx_reserva_estado) */ COUNT(*) AS reservas, SUM(valor_total) AS ingresos FROM RESERVA r WHERE estado = 'FINALIZADA') LOOP NULL; END LOOP;
+        FOR r IN (SELECT /*+ INDEX(p idx_pago_metodo) */ COUNT(*) AS pagos, SUM(valor) AS recaudado FROM PAGO p WHERE metodo_pago = 'EFECTIVO') LOOP NULL; END LOOP;
     END LOOP;
     v_tiempo := SYSTIMESTAMP - v_inicio;
     DBMS_OUTPUT.PUT_LINE('C4 forzando el índice: '
@@ -249,5 +248,5 @@ BEGIN
 END;
 /
 
--- No sirve y hace más lentos los INSERT de RESERVA: se elimina
-DROP INDEX idx_reserva_estado;
+-- No sirve y hace más lentos los INSERT de PAGO: se elimina
+DROP INDEX idx_pago_metodo;
