@@ -171,7 +171,7 @@ END;
 /
 
 
--- 4. Índice que NO ayuda: FINALIZADA es cerca del 60 % de las reservas,
+-- 4. Índice que NO ayuda: FINALIZADA es la gran mayoría de las reservas,
 --    así que leer la tabla completa es más barato que usar el índice.
 EXPLAIN PLAN SET STATEMENT_ID = 'C4_ANTES' FOR
 SELECT COUNT(*) AS reservas, SUM(valor_total) AS ingresos
@@ -197,7 +197,9 @@ END;
 /
 
 CREATE INDEX idx_reserva_estado ON RESERVA (estado);
-EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'RESERVA', cascade => TRUE);
+-- Histograma: sin él Oracle supone que los 4 estados se reparten por igual (25 % cada uno)
+-- y elegiría el índice; con él sabe que FINALIZADA es la mayoría.
+EXEC DBMS_STATS.GATHER_TABLE_STATS(USER, 'RESERVA', cascade => TRUE, method_opt => 'FOR ALL INDEXED COLUMNS SIZE 254');
 
 -- El plan no cambia: el optimizador ignora el índice
 EXPLAIN PLAN SET STATEMENT_ID = 'C4_DESPUES' FOR
