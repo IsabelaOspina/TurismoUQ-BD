@@ -2,6 +2,17 @@
 SET LINESIZE 200
 SET PAGESIZE 100
 
+-- Borra los índices de esta prueba si ya existen para que el script se pueda repetir.
+BEGIN
+    FOR i IN (SELECT index_name
+                FROM user_indexes
+               WHERE index_name IN ('IDX_RESERVA_ENTRADA_ESTADO', 'IDX_CLIENTE_CORREO_UPPER',
+                                    'IDX_PAGO_FECHA_VALOR', 'IDX_RESERVA_ESTADO')) LOOP
+        EXECUTE IMMEDIATE 'DROP INDEX ' || i.index_name;
+    END LOOP;
+END;
+/
+
 
 -- 1. Llegadas de un día por estado · índice COMPUESTO
 EXPLAIN PLAN SET STATEMENT_ID = 'C1_ANTES' FOR
