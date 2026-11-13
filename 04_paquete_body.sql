@@ -331,13 +331,14 @@ END fn_valor_estadia;
                 SELECT DISTINCT
                     h.id_alojamiento,
                     r.id_reserva,
-                    r.valor_total
+                    r.valor_total,
+                    r.estado
                 FROM RESERVA r
                 JOIN RESERVA_HABITACION rh
                   ON rh.id_reserva = r.id_reserva
                 JOIN HABITACION h
                   ON h.id_habitacion = rh.id_habitacion
-                WHERE r.estado IN ('CONFIRMADA', 'FINALIZADA')
+                WHERE r.estado IN ('CONFIRMADA', 'FINALIZADA', 'CANCELADA')
                   AND r.fecha_entrada >= ADD_MONTHS(
                       TO_DATE(cp_anio || '-01-01', 'YYYY-MM-DD'),
                       cp_mes - 1
@@ -362,8 +363,10 @@ END fn_valor_estadia;
                 a.nombre AS alojamiento,
                 m.nombre AS municipio,
                 temp.tipo AS temporada,
-                COUNT(*) AS total_reservas,
-                SUM(rm.valor_total) AS ingresos,
+                -- Las canceladas no cuentan como reserva; solo aportan el dinero retenido
+                COUNT(CASE WHEN rm.estado <> 'CANCELADA' THEN 1 END) AS total_reservas,
+                SUM(CASE WHEN rm.estado = 'CANCELADA' THEN NVL(p.pagado, 0)
+                         ELSE rm.valor_total END) AS ingresos,
                 SUM(NVL(p.pagado, 0)) AS pagado
             FROM reservas_mes rm
             JOIN ALOJAMIENTO a
@@ -373,6 +376,7 @@ END fn_valor_estadia;
             LEFT JOIN pagos p
               ON p.id_reserva = rm.id_reserva
             JOIN TEMPORADA temp ON temp.mes = cp_mes
+            WHERE rm.estado <> 'CANCELADA' OR p.pagado > 0
             GROUP BY
                 a.id_alojamiento,
                 a.nombre,
@@ -475,6 +479,7 @@ END fn_valor_estadia;
                     h.id_alojamiento,
                     r.id_reserva,
                     r.valor_total,
+                    r.estado,
                     t.tipo AS temporada
                 FROM RESERVA r
                 JOIN RESERVA_HABITACION rh
@@ -483,7 +488,7 @@ END fn_valor_estadia;
                   ON h.id_habitacion = rh.id_habitacion
                 JOIN TEMPORADA t
                   ON t.mes = EXTRACT(MONTH FROM r.fecha_entrada)
-                WHERE r.estado IN ('CONFIRMADA', 'FINALIZADA')
+                WHERE r.estado IN ('CONFIRMADA', 'FINALIZADA', 'CANCELADA')
                   AND r.fecha_entrada >= TO_DATE(cp_anio || '-01-01', 'YYYY-MM-DD')
                   AND r.fecha_entrada <  TO_DATE((cp_anio + 1) || '-01-01', 'YYYY-MM-DD')
             ),
@@ -502,8 +507,10 @@ END fn_valor_estadia;
                 a.id_alojamiento,
                 a.nombre AS alojamiento,
                 m.nombre AS municipio,
-                COUNT(*) AS total_reservas,
-                SUM(ra.valor_total) AS ingresos,
+                -- Las canceladas no cuentan como reserva; solo aportan el dinero retenido
+                COUNT(CASE WHEN ra.estado <> 'CANCELADA' THEN 1 END) AS total_reservas,
+                SUM(CASE WHEN ra.estado = 'CANCELADA' THEN NVL(p.pagado, 0)
+                         ELSE ra.valor_total END) AS ingresos,
                 SUM(NVL(p.pagado, 0)) AS pagado
             FROM reservas_anio ra
             JOIN ALOJAMIENTO a
@@ -512,6 +519,7 @@ END fn_valor_estadia;
               ON m.id_municipio = a.id_municipio
             LEFT JOIN pagos p
               ON p.id_reserva = ra.id_reserva
+            WHERE ra.estado <> 'CANCELADA' OR p.pagado > 0
             GROUP BY
                 ra.temporada,
                 a.id_alojamiento,
